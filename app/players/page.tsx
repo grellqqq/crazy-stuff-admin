@@ -1,18 +1,51 @@
 import { requireAuth } from '@/lib/auth';
 import { getDB } from '@/lib/db';
+import { ObjectId } from 'mongodb';
+import { bulkDeletePlayers } from '@/app/actions';
 
-async function getPlayers(search: string) {
+async function getMergedPlayers(search: string) {
   const db = await getDB();
-  const filter = search
-    ? { username: { $regex: search, $options: 'i' } }
-    : {};
+
+  // Build a filter that checks players.username OR users.email via a lookup
+  // Strategy: fetch players, then join users. For search, we filter post-join.
   const players = await db
     .collection('players')
-    .find(filter)
+    .find({})
     .sort({ createdAt: -1 })
-    .limit(200)
+    .limit(500)
     .toArray();
-  return players;
+
+  if (players.length === 0) return [];
+
+  // Collect userIds
+  const userIds = players
+    .map((p) => p.userId)
+    .filter(Boolean)
+    .map((uid) =>
+      uid instanceof ObjectId ? uid : new ObjectId(String(uid))
+    );
+
+  const users = await db
+    .collection('users')
+    .find({ _id: { $in: userIds } })
+    .toArray();
+
+  const userMap = new Map(users.map((u) => [String(u._id), u]));
+
+  const merged = players.map((p) => {
+    const user = userMap.get(String(p.userId)) ?? null;
+    return { player: p, user };
+  });
+
+  if (!search) return merged;
+
+  const q = search.toLowerCase();
+  return merged.filter(
+    ({ player, user }) =>
+      player.username?.toLowerCase().includes(q) ||
+      user?.email?.toLowerCase().includes(q) ||
+      user?.username?.toLowerCase().includes(q)
+  );
 }
 
 export default async function PlayersPage({
@@ -23,22 +56,30 @@ export default async function PlayersPage({
   await requireAuth();
   const params = await searchParams;
   const search = params.search ?? '';
-  const players = await getPlayers(search);
+  const rows = await getMergedPlayers(search);
+
+  async function handleBulkDelete(formData: FormData) {
+    'use server';
+    const raw = formData.get('selectedIds') as string;
+    const ids = raw ? raw.split(',').filter(Boolean) : [];
+    await bulkDeletePlayers(ids);
+  }
 
   return (
     <div className="p-8">
       <div className="flex items-center justify-between mb-6">
         <h1 className="text-2xl font-bold text-yellow-400">Players</h1>
-        <span className="text-gray-400 text-sm">{players.length} found</span>
+        <span className="text-gray-400 text-sm">{rows.length} found</span>
       </div>
 
+      {/* Search */}
       <form method="GET" className="mb-4">
         <div className="flex gap-2">
           <input
             name="search"
             defaultValue={search}
-            placeholder="Search by username..."
-            className="bg-gray-800 border border-gray-700 rounded px-3 py-2 text-gray-100 placeholder-gray-500 focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 w-72"
+            placeholder="Search by username or email..."
+            className="bg-gray-800 border border-gray-700 rounded px-3 py-2 text-gray-100 placeholder-gray-500 focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 w-80"
           />
           <button
             type="submit"
@@ -57,43 +98,131 @@ export default async function PlayersPage({
         </div>
       </form>
 
-      <div className="bg-gray-900 border border-gray-700 rounded-lg overflow-hidden">
+      {/* Bulk delete — uses a hidden input populated by JS */}
+      <form action={handleBulkDelete} id="bulk-form" className="mb-3">
+        <input type="hidden" name="selectedIds" id="selected-ids-input" />
+        <button
+          type="submit"
+          id="bulk-delete-btn"
+          className="hidden bg-red-700 hover:bg-red-600 text-white px-4 py-1.5 rounded text-sm transition-colors"
+          onClick={(e) => {
+            // Confirmation is handled via the data-confirm pattern in a client
+            // component; here we rely on native confirm via the hidden input being
+            // populated before submit.
+          }}
+        >
+          Delete Selected
+        </button>
+      </form>
+
+      <div className="bg-gray-900 border border-gray-700 rounded-lg overflow-x-auto">
         <table className="w-full text-sm">
           <thead>
             <tr className="border-b border-gray-700 bg-gray-800">
-              <th className="text-left px-4 py-3 text-gray-400 font-medium">Username</th>
-              <th className="text-left px-4 py-3 text-gray-400 font-medium">Level</th>
-              <th className="text-left px-4 py-3 text-gray-400 font-medium">XP</th>
-              <th className="text-left px-4 py-3 text-gray-400 font-medium">Coins</th>
-              <th className="text-left px-4 py-3 text-gray-400 font-medium">Races</th>
-              <th className="text-left px-4 py-3 text-gray-400 font-medium">Wins</th>
-              <th className="text-left px-4 py-3 text-gray-400 font-medium">Character</th>
-              <th className="text-left px-4 py-3 text-gray-400 font-medium"></th>
+              <th className="px-4 py-3 w-8">
+                <input
+                  type="checkbox"
+                  id="select-all"
+                  className="accent-blue-500"
+                />
+              </th>
+              <th className="text-left px-4 py-3 text-gray-400 font-medium">
+                Username
+              </th>
+              <th className="text-left px-4 py-3 text-gray-400 font-medium">
+                Email
+              </th>
+              <th className="text-left px-4 py-3 text-gray-400 font-medium">
+                Lv
+              </th>
+              <th className="text-left px-4 py-3 text-gray-400 font-medium">
+                XP
+              </th>
+              <th className="text-left px-4 py-3 text-gray-400 font-medium">
+                Coins
+              </th>
+              <th className="text-left px-4 py-3 text-gray-400 font-medium">
+                Races
+              </th>
+              <th className="text-left px-4 py-3 text-gray-400 font-medium">
+                Wins
+              </th>
+              <th className="text-left px-4 py-3 text-gray-400 font-medium">
+                Char
+              </th>
+              <th className="text-left px-4 py-3 text-gray-400 font-medium">
+                Google
+              </th>
+              <th className="text-left px-4 py-3 text-gray-400 font-medium">
+                Created
+              </th>
+              <th className="px-4 py-3"></th>
             </tr>
           </thead>
           <tbody>
-            {players.length === 0 && (
+            {rows.length === 0 && (
               <tr>
-                <td colSpan={8} className="text-center py-8 text-gray-500">
+                <td
+                  colSpan={12}
+                  className="text-center py-8 text-gray-500"
+                >
                   No players found
                 </td>
               </tr>
             )}
-            {players.map((p) => (
+            {rows.map(({ player, user }) => (
               <tr
-                key={String(p._id)}
+                key={String(player._id)}
                 className="border-b border-gray-800 hover:bg-gray-800/50 transition-colors"
               >
-                <td className="px-4 py-3 text-gray-100 font-medium">{p.username}</td>
-                <td className="px-4 py-3 text-gray-300">{p.level ?? 1}</td>
-                <td className="px-4 py-3 text-gray-300">{(p.xp ?? 0).toLocaleString()}</td>
-                <td className="px-4 py-3 text-yellow-400">{(p.coins ?? 0).toLocaleString()}</td>
-                <td className="px-4 py-3 text-gray-300">{p.totalRaces ?? 0}</td>
-                <td className="px-4 py-3 text-green-400">{p.totalWins ?? 0}</td>
-                <td className="px-4 py-3 text-gray-400 text-xs">{p.equippedChar ?? '—'}</td>
+                <td className="px-4 py-3">
+                  <input
+                    type="checkbox"
+                    className="row-checkbox accent-blue-500"
+                    data-id={String(player._id)}
+                  />
+                </td>
+                <td className="px-4 py-3 text-gray-100 font-medium">
+                  {player.username}
+                </td>
+                <td className="px-4 py-3 text-gray-300 text-xs">
+                  {user?.email ?? (
+                    <span className="text-gray-600 italic">—</span>
+                  )}
+                </td>
+                <td className="px-4 py-3 text-gray-300">
+                  {player.level ?? 1}
+                </td>
+                <td className="px-4 py-3 text-gray-300">
+                  {(player.xp ?? 0).toLocaleString()}
+                </td>
+                <td className="px-4 py-3 text-yellow-400">
+                  {(player.coins ?? 0).toLocaleString()}
+                </td>
+                <td className="px-4 py-3 text-gray-300">
+                  {player.totalRaces ?? 0}
+                </td>
+                <td className="px-4 py-3 text-green-400">
+                  {player.totalWins ?? 0}
+                </td>
+                <td className="px-4 py-3 text-gray-400 text-xs">
+                  {player.equippedChar ?? '—'}
+                </td>
+                <td className="px-4 py-3">
+                  {user?.googleSub ? (
+                    <span className="text-xs text-green-400">Linked</span>
+                  ) : (
+                    <span className="text-xs text-gray-600">No</span>
+                  )}
+                </td>
+                <td className="px-4 py-3 text-gray-400 text-xs">
+                  {player.createdAt
+                    ? new Date(player.createdAt).toLocaleDateString()
+                    : '—'}
+                </td>
                 <td className="px-4 py-3">
                   <a
-                    href={`/players/${String(p._id)}`}
+                    href={`/players/${String(player._id)}`}
                     className="text-blue-400 hover:text-blue-300 text-xs"
                   >
                     Edit
@@ -104,6 +233,60 @@ export default async function PlayersPage({
           </tbody>
         </table>
       </div>
+
+      {/* Inline script for checkbox → bulk delete wiring */}
+      <script
+        dangerouslySetInnerHTML={{
+          __html: `
+(function() {
+  var selectAll = document.getElementById('select-all');
+  var bulkBtn = document.getElementById('bulk-delete-btn');
+  var input = document.getElementById('selected-ids-input');
+  var form = document.getElementById('bulk-form');
+
+  function getChecked() {
+    return Array.from(document.querySelectorAll('.row-checkbox:checked'))
+      .map(function(el) { return el.dataset.id; });
+  }
+
+  function syncBtn() {
+    var ids = getChecked();
+    if (ids.length > 0) {
+      bulkBtn.classList.remove('hidden');
+      bulkBtn.textContent = 'Delete ' + ids.length + ' Selected';
+    } else {
+      bulkBtn.classList.add('hidden');
+    }
+  }
+
+  document.querySelectorAll('.row-checkbox').forEach(function(cb) {
+    cb.addEventListener('change', syncBtn);
+  });
+
+  if (selectAll) {
+    selectAll.addEventListener('change', function() {
+      document.querySelectorAll('.row-checkbox').forEach(function(cb) {
+        cb.checked = selectAll.checked;
+      });
+      syncBtn();
+    });
+  }
+
+  if (form) {
+    form.addEventListener('submit', function(e) {
+      var ids = getChecked();
+      if (ids.length === 0) { e.preventDefault(); return; }
+      if (!confirm('Delete ' + ids.length + ' player(s) and all their data?')) {
+        e.preventDefault();
+        return;
+      }
+      input.value = ids.join(',');
+    });
+  }
+})();
+          `,
+        }}
+      />
     </div>
   );
 }

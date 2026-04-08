@@ -45,10 +45,10 @@ export default async function RootLayout({
               Players
             </a>
             <a
-              href="/users"
+              href="/items"
               className="text-blue-400 hover:text-blue-300 transition-colors text-sm"
             >
-              Users
+              Items
             </a>
             <form action={logoutAction} className="ml-auto">
               <button
