@@ -61,7 +61,14 @@ export default async function PlayersPage({
   await requireAuth();
   const params = await searchParams;
   const search = params.search ?? '';
-  const rows = await getMergedPlayers(search);
+  let rows: Awaited<ReturnType<typeof getMergedPlayers>> = [];
+  let dbError = '';
+  try {
+    rows = await getMergedPlayers(search);
+  } catch (e: unknown) {
+    dbError = e instanceof Error ? e.message : 'Unknown database error';
+    console.error('[Players] DB error:', e);
+  }
 
   async function handleBulkDelete(formData: FormData) {
     'use server';
@@ -72,6 +79,11 @@ export default async function PlayersPage({
 
   return (
     <div className="p-8">
+      {dbError && (
+        <div className="bg-red-900/50 border border-red-700 rounded p-4 mb-4 text-red-300 text-sm">
+          <strong>Database Error:</strong> {dbError}
+        </div>
+      )}
       <div className="flex items-center justify-between mb-6">
         <h1 className="text-2xl font-bold text-yellow-400">Players</h1>
         <span className="text-gray-400 text-sm">{rows.length} found</span>
