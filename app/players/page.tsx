@@ -17,13 +17,18 @@ async function getMergedPlayers(search: string) {
 
   if (players.length === 0) return [];
 
-  // Collect userIds
+  // Collect userIds — stored as strings in players collection
   const userIds = players
     .map((p) => p.userId)
     .filter(Boolean)
-    .map((uid) =>
-      uid instanceof ObjectId ? uid : new ObjectId(String(uid))
-    );
+    .map((uid) => {
+      try {
+        return uid instanceof ObjectId ? uid : new ObjectId(String(uid));
+      } catch {
+        return null;
+      }
+    })
+    .filter((x): x is ObjectId => x !== null);
 
   const users = await db
     .collection('users')

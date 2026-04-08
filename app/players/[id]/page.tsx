@@ -62,25 +62,23 @@ async function getPlayerFull(id: string) {
     return null;
   }
 
-  const [player, inventory] = await Promise.all([
-    db.collection('players').findOne({ _id: oid }),
-    db
-      .collection('inventory')
-      .find({ playerId: oid })
-      .sort({ obtainedAt: -1 })
-      .toArray(),
-  ]);
+  const player = await db.collection('players').findOne({ _id: oid });
+  // playerId is stored as string in inventory collection
+  const inventory = await db
+    .collection('inventory')
+    .find({ playerId: oid.toString() })
+    .sort({ obtainedAt: -1 })
+    .toArray();
 
   if (!player) return null;
 
-  const user = player.userId
-    ? await db.collection('users').findOne({
-        _id:
-          player.userId instanceof ObjectId
-            ? player.userId
-            : new ObjectId(String(player.userId)),
-      })
-    : null;
+  let user = null;
+  if (player.userId) {
+    try {
+      const uid = player.userId instanceof ObjectId ? player.userId : new ObjectId(String(player.userId));
+      user = await db.collection('users').findOne({ _id: uid });
+    } catch { /* invalid userId format */ }
+  }
 
   return { player, user, inventory };
 }
